@@ -198,12 +198,22 @@ public:
   }
 
   void writeDataBuf(uint16_t *buf, uint32_t len) {
+    // Fast in-place byte swap from little-endian to big-endian
+    for (uint32_t i = 0; i < len; i++) {
+      buf[i] = (buf[i] >> 8) | (buf[i] << 8);
+    }
+
     SPI.beginTransaction(spiSettings);
     gpio_put(TFT_DC, 1);  // Data Mode (HIGH)
     gpio_put(TFT_CS, 0);  // Select Chip (LOW)
     SPI.transfer((uint8_t*)buf, nullptr, len * 2);
     gpio_put(TFT_CS, 1);  // Deselect (HIGH)
     SPI.endTransaction();
+
+    // Fast in-place byte swap back to native little-endian for the next frame's drawing operations
+    for (uint32_t i = 0; i < len; i++) {
+      buf[i] = (buf[i] >> 8) | (buf[i] << 8);
+    }
   }
 
   void init() {
