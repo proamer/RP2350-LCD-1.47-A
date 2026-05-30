@@ -438,7 +438,7 @@ void fillRoundRect(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r, uint16
 void drawChar(int16_t x, int16_t y, unsigned char c, uint16_t color, uint16_t bg, uint8_t size) {
   if (c < 32 || c > 127) return; // Print only valid ASCII symbols
   
-  int fontIndex = (c - 32) * 5;
+  int fontIndex = c * 5;
   for (int8_t i = 0; i < 5; i++) {
     uint8_t line = font[fontIndex + i];
     for (int8_t j = 0; j < 8; j++) {
