@@ -244,7 +244,7 @@ public:
     writeData(0x05);    // 16-bit color format (RGB565)
 
     writeCommand(0x36); // Memory Access Control (MADCTL)
-    writeData(0x00);    // Portrait mode, standard RGB color order
+    writeData(0x08);    // Portrait mode, BGR color order (Waveshare LCD default)
 
     writeCommand(0x21); // Display Inversion ON (IPS screen requirement)
     
