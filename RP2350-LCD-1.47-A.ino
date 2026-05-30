@@ -9,9 +9,13 @@
  * KEY FEATURES:
  * - ZERO external library dependencies (no Adafruit_GFX, no Adafruit_ST7789 required!).
  * - Built-in optimized DirectST7789 hardware SPI display driver.
- * - Custom high-speed graphics drawing engine (lines, circles, rounded rectangles, text).
+ * - Resolves critical Pico/RP2350 pin-mux conflicts where hardware SPI0 automatically
+ *   hijacks GPIO 16 (DC) and GPIO 17 (CS) by explicitly reclaiming them as standard 
+ *   software SIO GPIOs using direct Pico SDK registers.
+ * - Custom high-speed graphics drawing engine (lines, circles, rounded rectangles, text)
+ *   utilizing direct single-cycle `gpio_put()` operations for ultra-high FPS.
  * - Compact embedded 5x7 monospaced ASCII font array (1.2KB) in flash memory.
- * - Full-screen double buffering (110KB) in RP2350's 520KB SRAM for 100% flicker-free ~55 FPS.
+ * - Full-screen double buffering (110KB) in RP2350's 520KB SRAM for 100% flicker-free.
  * 
  * Hardware Pin Mapping:
  * - TFT_DC   : GPIO 16 (Data/Command)
@@ -25,6 +29,7 @@
 
 #include <SPI.h>
 #include <math.h>
+#include "hardware/gpio.h" // Include native Pico SDK GPIO registers
 
 // --- Hardware Pin Definitions ---
 #define TFT_DC   16
@@ -168,68 +173,86 @@ static const uint8_t font[] = {
 // DIRECT ST7789 SCREEN SPI DRIVER CLASS
 // ==========================================
 class DirectST7789 {
+private:
+  SPISettings spiSettings;
+
 public:
+  DirectST7789() : spiSettings(24000000, MSBFIRST, SPI_MODE0) {} // 24MHz hardware SPI clock
+
   void writeCommand(uint8_t cmd) {
-    digitalWrite(TFT_DC, LOW);  // Command Mode
-    digitalWrite(TFT_CS, LOW);  // Select Chip
+    SPI.beginTransaction(spiSettings);
+    gpio_put(TFT_DC, 0);  // Command Mode (LOW)
+    gpio_put(TFT_CS, 0);  // Select Chip (LOW)
     SPI.transfer(cmd);
-    digitalWrite(TFT_CS, HIGH); // Deselect
+    gpio_put(TFT_CS, 1);  // Deselect (HIGH)
+    SPI.endTransaction();
   }
 
   void writeData(uint8_t data) {
-    digitalWrite(TFT_DC, HIGH); // Data Mode
-    digitalWrite(TFT_CS, LOW);  // Select Chip
+    SPI.beginTransaction(spiSettings);
+    gpio_put(TFT_DC, 1);  // Data Mode (HIGH)
+    gpio_put(TFT_CS, 0);  // Select Chip (LOW)
     SPI.transfer(data);
-    digitalWrite(TFT_CS, HIGH); // Deselect
+    gpio_put(TFT_CS, 1);  // Deselect (HIGH)
+    SPI.endTransaction();
   }
 
   void writeDataBuf(uint16_t *buf, uint32_t len) {
-    digitalWrite(TFT_DC, HIGH); // Data Mode
-    digitalWrite(TFT_CS, LOW);  // Select Chip
-    
-    // SPI.transfer uses highly-optimized FIFO SPI blocks in earlephilhower's pico core
+    SPI.beginTransaction(spiSettings);
+    gpio_put(TFT_DC, 1);  // Data Mode (HIGH)
+    gpio_put(TFT_CS, 0);  // Select Chip (LOW)
     SPI.transfer((uint8_t*)buf, nullptr, len * 2);
-    
-    digitalWrite(TFT_CS, HIGH); // Deselect
+    gpio_put(TFT_CS, 1);  // Deselect (HIGH)
+    SPI.endTransaction();
   }
 
   void init() {
-    pinMode(TFT_DC, OUTPUT);
-    pinMode(TFT_CS, OUTPUT);
-    pinMode(TFT_RST, OUTPUT);
+    // 1. Initialize Backlight
     pinMode(TFT_BL, OUTPUT);
+    digitalWrite(TFT_BL, HIGH);
 
-    digitalWrite(TFT_CS, HIGH);
-    digitalWrite(TFT_BL, HIGH); // Turn on Backlight
+    // 2. Initialize Reset Pin
+    pinMode(TFT_RST, OUTPUT);
+    digitalWrite(TFT_RST, HIGH);
 
-    // Hardware Reset Pulse
-    digitalWrite(TFT_RST, HIGH);
+    // 3. Reset hardware display muxing for CS (17) and DC (16) back to software SIO GPIO control.
+    // This is CRITICAL because SPI.begin() claims both pins for the hardware SPI module block.
+    gpio_init(TFT_CS);
+    gpio_set_dir(TFT_CS, GPIO_OUT);
+    gpio_put(TFT_CS, 1);
+
+    gpio_init(TFT_DC);
+    gpio_set_dir(TFT_DC, GPIO_OUT);
+    gpio_put(TFT_DC, 1);
+
+    // Hardware Reset Sequence
+    gpio_put(TFT_RST, 1);
     delay(50);
-    digitalWrite(TFT_RST, LOW);
+    gpio_put(TFT_RST, 0);
     delay(50);
-    digitalWrite(TFT_RST, HIGH);
+    gpio_put(TFT_RST, 1);
     delay(150);
 
+    // Software Register Initialization Sequence
     writeCommand(0x01); // Software Reset
     delay(150);
 
     writeCommand(0x11); // Sleep Out
     delay(150);
 
-    writeCommand(0x3A); // Interface Pixel Format
-    writeData(0x05);    // 16-bit/pixel color (RGB565)
+    writeCommand(0x3A); // Interface Pixel Format (COLMOD)
+    writeData(0x05);    // 16-bit color format (RGB565)
 
-    writeCommand(0x36); // Memory Data Access Control (MADCTL)
+    writeCommand(0x36); // Memory Access Control (MADCTL)
     writeData(0x00);    // Portrait mode, standard RGB color order
 
-    writeCommand(0x21); // Display Inversion ON (Required for Waveshare IPS screens)
+    writeCommand(0x21); // Display Inversion ON (IPS screen requirement)
     
     writeCommand(0x29); // Display ON
     delay(100);
   }
 
   void setWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-    // Add the 34 columns offset required for the 1.47-inch LCD panel
     x0 += LCD_COL_OFFSET;
     x1 += LCD_COL_OFFSET;
 
@@ -245,7 +268,7 @@ public:
     writeData(y1 >> 8);
     writeData(y1 & 0xFF);
 
-    writeCommand(0x2C); // Write RAM command
+    writeCommand(0x2C); // Write RAM
   }
 };
 
@@ -456,16 +479,12 @@ const uint16_t BLINK_DURATION = 150; // ms
 
 // --- Setup Function ---
 void setup() {
-  // Config BL pin as output and turn it on
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);
-
   // Initialize Hardware SPI0 on standard Waveshare pins
-  SPI.setTX(TFT_MOSI);
-  SPI.setSCK(TFT_CLK);
+  SPI.setTX(TFT_MOSI); // GPIO 19
+  SPI.setSCK(TFT_CLK);   // GPIO 18
   SPI.begin();
 
-  // Initialize display controller registers
+  // Initialize display (claims back CS and DC from hardware SPI control)
   tft.init();
 
   // Seed the random number generator
