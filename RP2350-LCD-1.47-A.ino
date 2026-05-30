@@ -717,9 +717,6 @@ void loop() {
 
     // Draw the vertical line inside buffer
     drawFastVLine(barX, waveY - barHeight, barHeight * 2, barColor);
-    // Render top/bottom bright accent pixels
-    drawPixel(barX, waveY - barHeight - 1, COLOR_WHITE);
-    drawPixel(barX, waveY + barHeight, COLOR_WHITE);
   }
 
   // ==========================================
