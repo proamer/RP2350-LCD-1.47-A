@@ -294,6 +294,13 @@ void drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color) {
   }
 }
 
+// Draw filled solid rectangle
+void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+  for (int16_t j = 0; j < h; j++) {
+    drawFastHLine(x, y + j, w, color);
+  }
+}
+
 // Bresenham's line algorithm for arbitrary lines
 void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color) {
   int16_t dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
